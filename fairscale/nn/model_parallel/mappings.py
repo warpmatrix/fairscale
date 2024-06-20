@@ -38,8 +38,13 @@ def _reduce(ctx: Any, input_: torch.Tensor) -> torch.Tensor:
     if torch.distributed.get_world_size(group=group) == 1:
         return input_
 
-    # All-reduce.
-    torch.distributed.all_reduce(input_, group=group)
+    # reference: https://github.com/pytorch/pytorch/issues/75595#issue-1199786847
+    with torch.inference_mode(False):
+        # All-reduce.
+        output = input_.clone()
+        torch.distributed.all_reduce(output, group=group)
+
+    input_.copy_(output)
 
     return input_
 
@@ -77,9 +82,10 @@ def _gather(input_: torch.Tensor) -> torch.Tensor:
     rank = torch.distributed.get_rank(group=group)
     world_size = torch.distributed.get_world_size(group=group)
 
-    tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
-    tensor_list[rank] = input_
-    torch.distributed.all_gather(tensor_list, input_, group=group)
+    with torch.inference_mode(False):
+        tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
+        tensor_list[rank] = input_.clone()
+        torch.distributed.all_gather(tensor_list, input_, group=group)
 
     # Note: torch.cat already creates a contiguous tensor.
     output = torch.cat(tensor_list, dim=last_dim).contiguous()
